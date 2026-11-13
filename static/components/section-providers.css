@@ -9,6 +9,24 @@
     font-size: 11px;
     white-space: nowrap;
 }
+.kiro-quota-badge {
+    display: inline-block;
+    padding: 4px 9px;
+    margin: 4px 0;
+    border: 1px solid var(--primary-20);
+    border-radius: 8px;
+    background: var(--primary-10);
+    color: var(--primary-color);
+    font: inherit;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+}
+.kiro-quota-badge:disabled { cursor: wait; }
+.kiro-quota-badge:focus-visible { outline: 2px solid var(--primary-color); }
 .providers-handoff-panel {
     background: linear-gradient(135deg, var(--primary-10) 0%, var(--bg-primary) 58%, var(--bg-secondary) 100%);
     border: 1px solid var(--primary-20);

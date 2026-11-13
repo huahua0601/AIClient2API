@@ -1,3 +1,4 @@
+import { creditUsageFields, readKiroMeteringCredits } from '../../utils/credit-usage.js';
 import { atomicWriteFile } from '../../utils/file-lock.js';
 import axios from 'axios';
 import logger from '../../utils/logger.js';
@@ -1876,6 +1877,12 @@ async saveCredentialsToFile(filePath, newData) {
     parseEventStreamChunk(rawData, toolNameMaps = null) {
         const rawStr = Buffer.isBuffer(rawData) ? rawData.toString('utf8') : String(rawData);
         let fullContent = '';
+        let credits = null;
+        // Preserve binary frame boundaries before converting the legacy content path to text.
+        const binaryEvents = Buffer.isBuffer(rawData) ? this.parseAwsEventStreamBuffer(rawData).events : [];
+        for (const event of binaryEvents) {
+            if (event.type === 'metering') credits = (credits ?? 0) + event.data.credits;
+        }
         const toolCalls = [];
         let currentToolCallDict = null;
         // 记录被忽略的占位工具调用 id（详见 KIRO_PLACEHOLDER_TOOL_NAME 说明）
@@ -1908,6 +1915,11 @@ async saveCredentialsToFile(filePath, newData) {
                 try {
                     const eventData = JSON.parse(jsonCandidate);
 
+                    // Legacy text fixtures/responses have no binary frame headers.
+                    if (!Buffer.isBuffer(rawData)) {
+                        const metered = readKiroMeteringCredits(eventData);
+                        if (metered !== null) credits = (credits ?? 0) + metered;
+                    }
                     // 优先处理结构化工具调用事件
                     if (eventData.name && eventData.toolUseId) {
                         if (eventData.name === KIRO_PLACEHOLDER_TOOL_NAME || ignoredToolUseIds.has(eventData.toolUseId)) {
@@ -1973,7 +1985,7 @@ async saveCredentialsToFile(filePath, newData) {
         }
 
         const uniqueToolCalls = restoreKiroToolCallNames(deduplicateToolCalls(toolCalls), toolNameMaps);
-        return { content: fullContent || '', toolCalls: uniqueToolCalls };
+        return { content: fullContent || '', toolCalls: uniqueToolCalls, ...creditUsageFields({ credits }) };
     }
  
 
@@ -2020,6 +2032,7 @@ async saveCredentialsToFile(filePath, newData) {
                 method: 'post',
                 url: requestUrl,
                 data: requestData,
+                responseType: 'arraybuffer',
                 headers
             };
             this._applySidecar(axiosConfig);
@@ -2358,7 +2371,7 @@ async saveCredentialsToFile(filePath, newData) {
         }
 
         // 1. Parse structured events and bracket calls from parsed content
-        const parsedFromEvents = this.parseEventStreamChunk(rawResponseText, toolNameMaps);
+        const parsedFromEvents = this.parseEventStreamChunk(response.data, toolNameMaps);
         let fullResponseText = parsedFromEvents.content;
         let allToolCalls = [...parsedFromEvents.toolCalls]; // clone
         //logger.info(`[Kiro] Found ${allToolCalls.length} tool calls from event stream parsing.`);
@@ -2401,7 +2414,7 @@ async saveCredentialsToFile(filePath, newData) {
         
         //logger.info(`[Kiro] Final response text after tool call cleanup: ${fullResponseText}`);
         //logger.info(`[Kiro] Final tool calls after deduplication: ${JSON.stringify(uniqueToolCalls)}`);
-        return { responseText: fullResponseText, toolCalls: uniqueToolCalls };
+        return { responseText: fullResponseText, toolCalls: uniqueToolCalls, ...creditUsageFields(parsedFromEvents) };
     }
 
     async generateContent(model, requestBody) {
@@ -2427,7 +2440,7 @@ async saveCredentialsToFile(filePath, newData) {
         const response = await this.callApi('', finalModel, requestBody);
 
         try {
-            const { responseText, toolCalls } = this._processApiResponse(response);
+            const { responseText, toolCalls, credits } = this._processApiResponse(response);
 
             if (responseText === '' && toolCalls.length === 0) {
                 logger.warn('[Kiro] Empty response detected in generateContent (no text/tool calls received from upstream); signalling for retry.');
@@ -2440,7 +2453,9 @@ async saveCredentialsToFile(filePath, newData) {
             const contentForClaude = thinkingRequested
                 ? this._toClaudeContentBlocksFromKiroText(responseText)
                 : responseText;
-            return this.buildClaudeResponse(contentForClaude, false, 'assistant', model, toolCalls, inputTokens);
+            const result = this.buildClaudeResponse(contentForClaude, false, 'assistant', model, toolCalls, inputTokens);
+            Object.assign(result.usage, creditUsageFields({ credits }));
+            return result;
         } catch (error) {
             logger.error('[Kiro] Error in generateContent:', error);
             throw error;
@@ -2496,6 +2511,11 @@ async saveCredentialsToFile(filePath, newData) {
 
             // 事件分类：优先按上游声明的 :event-type 分发（type-based）。
             switch (eventType) {
+                case 'meteringEvent': {
+                    const credits = readKiroMeteringCredits(parsed);
+                    if (credits !== null) events.push({ type: 'metering', data: { credits } });
+                    break;
+                }
                 case 'assistantResponseEvent':
                     if (parsed.content !== undefined && !parsed.followupPrompt) {
                         events.push({ type: 'content', data: parsed.content });
@@ -2546,7 +2566,7 @@ async saveCredentialsToFile(filePath, newData) {
                     } else if (parsed.stop !== undefined) {
                         events.push({ type: 'toolUseStop', data: { stop: parsed.stop } });
                     }
-                    // {"signature":...} 签名事件、metering 等无内容意义的类型：静默忽略
+                    // Signature and other non-content events are ignored.
                     break;
             }
         }
@@ -2676,6 +2696,10 @@ async saveCredentialsToFile(filePath, newData) {
                         yield { type: 'toolUseInput', input: event.data.input };
                     } else if (event.type === 'toolUseStop') {
                         yield { type: 'toolUseStop', stop: event.data.stop };
+                    } else if (event.type === 'metering') {
+                        // Do not retry an attempt once its billable usage has been emitted.
+                        hasYieldedContent = true;
+                        yield { type: 'metering', credits: event.data.credits };
                     } else if (event.type === 'contextUsage') {
                         yield { type: 'contextUsage', contextUsagePercentage: event.data.contextUsagePercentage };
                     }
@@ -2821,6 +2845,7 @@ async saveCredentialsToFile(filePath, newData) {
 
         let inputTokens = 0;
         let contextUsagePercentage = null;
+        let credits = null;
         const messageId = `${uuidv4()}`;
 
         const thinkingType = requestBody?.thinking?.type;
@@ -2950,7 +2975,9 @@ async saveCredentialsToFile(filePath, newData) {
 
             // 2. 流式接收并发送每个 content_block_delta
             for await (const event of this.streamApiReal('', finalModel, requestBody)) {
-                if (event.type === 'contextUsage' && event.contextUsagePercentage) {
+                if (event.type === 'metering') {
+                    credits = (credits ?? 0) + event.credits;
+                } else if (event.type === 'contextUsage' && event.contextUsagePercentage) {
                     // 捕获上下文使用百分比（包含输入和输出的总使用量）
                     contextUsagePercentage = event.contextUsagePercentage;
                 } else if (event.type === 'reasoning' && event.reasoning) {
@@ -3352,6 +3379,7 @@ async saveCredentialsToFile(filePath, newData) {
                 type: "message_delta",
                 delta: { stop_reason: toolCalls.length > 0 ? "tool_use" : (emittedOnlyThinking ? "max_tokens" : "end_turn") },
                 usage: {
+                    ...creditUsageFields({ credits }),
                     input_tokens: inputTokens,
                     output_tokens: outputTokens,
                     cache_creation_input_tokens: 0,

@@ -1,3 +1,4 @@
+import { creditUsageFields } from '../../utils/credit-usage.js';
 /**
  * Claude转换器
  * 处理Claude（Anthropic）协议与其他协议之间的转换
@@ -367,6 +368,7 @@ export class ClaudeConverter extends BaseConverter {
                     finish_reason: "stop",
                 }],
                 usage: {
+                    ...creditUsageFields(claudeResponse.usage),
                     prompt_tokens: claudeResponse.usage?.input_tokens || 0,
                     completion_tokens: claudeResponse.usage?.output_tokens || 0,
                     total_tokens: (claudeResponse.usage?.input_tokens || 0) + (claudeResponse.usage?.output_tokens || 0),
@@ -455,6 +457,7 @@ export class ClaudeConverter extends BaseConverter {
                 finish_reason: finishReason,
             }],
             usage: {
+                ...creditUsageFields(claudeResponse.usage),
                 prompt_tokens: claudeResponse.usage?.input_tokens || 0,
                 completion_tokens: claudeResponse.usage?.output_tokens || 0,
                 total_tokens: (claudeResponse.usage?.input_tokens || 0) + (claudeResponse.usage?.output_tokens || 0),
@@ -651,6 +654,7 @@ export class ClaudeConverter extends BaseConverter {
 
             if(claudeChunk.usage){
                 chunk.usage = {
+                    ...creditUsageFields(claudeChunk.usage),
                     prompt_tokens: claudeChunk.usage.input_tokens || 0,
                     completion_tokens: claudeChunk.usage.output_tokens || 0,
                     total_tokens: (claudeChunk.usage.input_tokens || 0) + (claudeChunk.usage.output_tokens || 0),
@@ -1440,6 +1444,7 @@ export class ClaudeConverter extends BaseConverter {
                 finishReason: finishReasonMap[claudeResponse.stop_reason] || 'STOP'
             }],
             usageMetadata: claudeResponse.usage ? {
+                ...creditUsageFields(claudeResponse.usage),
                 promptTokenCount: claudeResponse.usage.input_tokens || 0,
                 candidatesTokenCount: claudeResponse.usage.output_tokens || 0,
                 totalTokenCount: (claudeResponse.usage.input_tokens || 0) + (claudeResponse.usage.output_tokens || 0),
@@ -1552,6 +1557,7 @@ export class ClaudeConverter extends BaseConverter {
                 // 添加 usage 信息
                 if (claudeChunk.usage) {
                     result.usageMetadata = {
+                        ...creditUsageFields(claudeChunk.usage),
                         promptTokenCount: claudeChunk.usage.input_tokens || 0,
                         candidatesTokenCount: claudeChunk.usage.output_tokens || 0,
                         totalTokenCount: (claudeChunk.usage.input_tokens || 0) + (claudeChunk.usage.output_tokens || 0),
@@ -2086,6 +2092,7 @@ export class ClaudeConverter extends BaseConverter {
             top_p: 1,
             truncation: "disabled",
             usage: {
+                ...creditUsageFields(claudeResponse.usage),
                 input_tokens: claudeResponse.usage?.input_tokens || 0,
                 input_tokens_details: {
                     cached_tokens: claudeResponse.usage?.cache_read_input_tokens || 0
@@ -2196,6 +2203,7 @@ export class ClaudeConverter extends BaseConverter {
             if (claudeChunk.usage) {
                 const state = streamStateManager.getOrCreateState(stateKey);
                 state.savedUsage = {
+                    ...creditUsageFields(claudeChunk.usage),
                     input_tokens: claudeChunk.usage.input_tokens || 0,
                     input_tokens_details: { cached_tokens: claudeChunk.usage.cache_read_input_tokens || 0 },
                     output_tokens: claudeChunk.usage.output_tokens || 0,

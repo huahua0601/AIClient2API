@@ -13,6 +13,7 @@ import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, getServiceAdapter, invalidateServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { normalizeProviderConfigFields } from '../utils/provider-config-normalizer.js';
+import { normalizeKiroQuota } from '../providers/claude/kiro-quota.js';
 
 
 
@@ -400,7 +401,7 @@ function normalizeAntigravityQuota(usage = {}) {
 
 /** Read provider quota for one account node. */
 export async function handleGetProviderQuota(req, res, currentConfig, providerPoolManager, providerType, providerUuid) {
-    if (!['github-copilot', 'openai-codex-oauth', 'gemini-antigravity'].includes(providerType)) {
+    if (!['github-copilot', 'openai-codex-oauth', 'gemini-antigravity', 'claude-kiro-oauth'].includes(providerType)) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'Quota lookup is not supported for this provider.' } }));
         return true;
@@ -424,7 +425,7 @@ export async function handleGetProviderQuota(req, res, currentConfig, providerPo
         delete serviceConfig.providerPools;
 
         const serviceAdapter = getServiceAdapter(serviceConfig);
-        const method = providerType === 'openai-codex-oauth'
+        const method = ['openai-codex-oauth', 'claude-kiro-oauth'].includes(providerType)
             ? 'getUsageLimits'
             : providerType === 'gemini-antigravity'
                 ? 'getQuotaSummary'
@@ -436,7 +437,9 @@ export async function handleGetProviderQuota(req, res, currentConfig, providerPo
         }
 
         const rawQuota = await serviceAdapter[method]();
-        const quota = providerType === 'openai-codex-oauth'
+        const quota = providerType === 'claude-kiro-oauth'
+            ? normalizeKiroQuota(rawQuota)
+            : providerType === 'openai-codex-oauth'
             ? normalizeCodexQuota(rawQuota)
             : providerType === 'gemini-antigravity'
                 ? normalizeAntigravityQuota(rawQuota)
